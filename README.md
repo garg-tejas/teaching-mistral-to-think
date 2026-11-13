@@ -44,9 +44,11 @@ Different stages had very different memory profiles:
 
 ## Results
 
+These are historical notebook outputs. They were not rerun during the offline evaluation work, and final-test per-example completions are not present locally. [The offline scoring protocol](OFFLINE-EVALUATION.md) documents a new shared scorer and the evidence needed for a reproducible comparison.
+
 ### 1. GSM8K Test Set (Unseen, Final Numbers)
 
-This is the metric that actually matters.
+The final evaluation notebook records the following results on the 1,319-row test split.
 
 | Stage         | Accuracy   | Notes                       |
 | ------------- | ---------- | --------------------------- |
@@ -54,7 +56,7 @@ This is the metric that actually matters.
 | SFT           | 44.50%     | 4k supervised examples      |
 | **RL (GRPO)** | **52.46%** | Structured reasoning via RL |
 
-**GRPO yields a +8% absolute gain over SFT on the unseen test set.**
+The recorded difference is **7.96 percentage points** over SFT. This is a historical result under the notebook's prompts, decoding, and extraction rules, not a newly reproduced gain.
 
 ---
 
@@ -66,7 +68,7 @@ This is the metric that actually matters.
 | SFT       | 58.00%   |
 | RL        | 45.40%\* |
 
-- This apparent drop is **not a real performance regression**. See below.
+- Different evaluation paths make this an uncontrolled comparison. The parser alone does not establish whether model quality regressed.
 
 ---
 
@@ -75,56 +77,15 @@ This is the metric that actually matters.
 At first glance, RL appears to _hurt_ performance on the 500-example internal eval split (58.00% → 45.40%).
 This initially raised concerns.
 
-After auditing the code paths, the cause was identified clearly:
+The notebooks used different extraction and comparison functions. SFT internal evaluation compared the last extracted numeric string; RL internal evaluation used numeric comparison, removed commas, and decoded the input prompt together with the completion. The code does not require well-formed XML to award correctness when tags are missing, so missing tags alone do not explain the discrepancy.
 
-> **The models were not evaluated with the same correctness function.**
+The final evaluation notebook used a common extraction function for all three models, preferring XML answer tags, then `####`, then the last numeric token. Its regex still mishandles thousands separators and fractions, and RL used a different system prompt from the other stages. Equal parsing helps comparability but does not isolate the effect of training.
 
-### What actually went wrong
+### Shared offline scorer
 
-Each notebook used a **slightly different answer-extraction + comparison rule**:
+A standard-library scorer now handles signed values, decimals, valid comma grouping, and simple fractions, with one recorded tolerance rule. The CLI scores saved completion-only JSONL, retains failures in the denominator, checks the ordered reference manifest, and writes a report with input/protocol hashes and required model/split/decoding metadata.
 
-#### ZS / SFT notebooks
-
-- Extracted the _last number as a string_
-- Used strict string equality
-- Very lenient toward formatting
-- Did **not** expect structured output
-
-#### RL notebook
-
-- Expected answers inside `<answer>...</answer>` XML tags
-- Used **numeric (float) comparison**
-- Penalized:
-
-  - missing tags
-  - truncated generations
-  - correct math with malformed structure
-
-As a result, the RL model was evaluated under a **strictly harsher criterion** during internal evaluation.
-
-This makes the RL score on the train-eval split **not directly comparable** to the ZS and SFT scores.
-
----
-
-### How this was fixed
-
-For the **final GSM8K test evaluation**, a **single unified extraction function** was used for _all_ models:
-
-1. Prefer `<answer>...</answer>` (RL-style)
-2. Fall back to `####` (GSM8K / SFT-style)
-3. Fall back to the last numeric token
-4. Compare numerically with tolerance
-
-Once evaluated consistently, the RL model clearly outperforms both baselines.
-
----
-
-### Key takeaway
-
-The lower RL score on the train-eval split is an **evaluation artifact**, not a modeling failure.
-
-> **This experiment reinforced a critical lesson:**
-> In RL for language models, _evaluation consistency matters as much as the training algorithm itself._
+See [OFFLINE-EVALUATION.md](OFFLINE-EVALUATION.md) for usage, numeric semantics, artifact limitations, and the tests. Future final-notebook executions use this shared scorer; the stored historical outputs predate it. No historical accuracy was recomputed for this change.
 
 ---
 
@@ -150,13 +111,6 @@ The project follows a standard alignment pipeline:
 
 ---
 
-## Final Thoughts
+## What this experiment establishes
 
-This was not about chasing SOTA numbers.
-It was about understanding **how GRPO actually behaves** in practice:
-
-- RL _does_ improve reasoning generalization
-- Output format matters more than expected
-- Evaluation bugs can completely invert conclusions if left unchecked
-
-Overall, GRPO proved to be a **practical and effective way** to push a 7B-scale model toward better reasoning, when used carefully.
+The stored notebooks document an SFT-to-GRPO experiment and report a higher final-test accuracy after GRPO. The strongest engineering lesson is the need to version correctness rules, preserve completion-only predictions, and separate format compliance from mathematical correctness. A controlled rerun or complete saved final-test predictions are still needed to verify the historical comparison under the new scoring protocol.
